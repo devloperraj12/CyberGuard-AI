@@ -1,5 +1,3 @@
-import Image from "next/image";
-
 export default function Home() {
   return (
     <main className="min-h-screen bg-slate-950 text-white">
@@ -38,9 +36,13 @@ export default function Home() {
               Technology
             </a>
 
-            <button className="rounded-lg border border-slate-700 px-4 py-2 text-sm hover:bg-slate-800">
+            {/* Fixed Sign In button */}
+            <a
+              href="/login"
+              className="rounded-lg border border-slate-700 px-4 py-2 text-sm transition hover:bg-slate-800"
+            >
               Sign In
-            </button>
+            </a>
           </div>
         </div>
       </nav>
@@ -65,14 +67,23 @@ export default function Home() {
             and understand how to improve their security posture.
           </p>
 
+          {/* Hero Buttons */}
           <div className="mt-10 flex flex-col justify-center gap-4 sm:flex-row">
-            <button className="rounded-lg bg-cyan-500 px-6 py-3 font-semibold text-slate-950 transition hover:bg-cyan-400">
+            {/* Fixed Start Security Scan button */}
+            <a
+              href="/scan"
+              className="rounded-lg bg-cyan-500 px-6 py-3 font-semibold text-slate-950 transition hover:bg-cyan-400"
+            >
               Start Security Scan
-            </button>
+            </a>
 
-            <button className="rounded-lg border border-slate-700 px-6 py-3 font-semibold transition hover:bg-slate-900">
+            {/* View Demo currently opens the scan page */}
+            <a
+              href="/scan"
+              className="rounded-lg border border-slate-700 px-6 py-3 font-semibold transition hover:bg-slate-900"
+            >
               View Demo
-            </button>
+            </a>
           </div>
         </div>
       </section>
