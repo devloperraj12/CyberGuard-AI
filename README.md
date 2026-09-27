@@ -448,6 +448,3 @@ Project: https://github.com/devloperraj12/CyberGuard-AI
 
 ---
 
-## License
-
-Add the project's chosen license before public production distribution. The repository currently does not declare a license.
