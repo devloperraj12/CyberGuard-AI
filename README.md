@@ -403,21 +403,6 @@ The security engine includes tests for safe and unsafe target handling, includin
 
 ---
 
-## Screenshots
-
-Screenshots can be added here for the final portfolio presentation.
-
-Suggested screenshots:
-
-1. Login / registration
-2. Dashboard
-3. New security scan
-4. Scan report
-5. AI Security Analyst panel
-6. Scan history
-
----
-
 ## Roadmap
 
 Planned improvements can include:
@@ -463,6 +448,3 @@ Project: https://github.com/devloperraj12/CyberGuard-AI
 
 ---
 
-## License
-
-Add the project's chosen license before public production distribution. The repository currently does not declare a license.
