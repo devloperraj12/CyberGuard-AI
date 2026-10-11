@@ -287,6 +287,9 @@ def analyze_tls(
 def analyze_certificate(
     response: httpx.Response,
 ) -> list[dict]:
+    import ssl
+    from datetime import datetime, timezone
+
     findings = []
 
     if response.url.scheme.lower() != "https":
@@ -296,13 +299,14 @@ def analyze_certificate(
         hostname = response.url.host
 
         if not hostname:
-            return findings
+            raise ValueError("Missing hostname")
 
         port = response.url.port or 443
         context = httpx.create_ssl_context()
 
-        with socket.create_connection(
-            (hostname, port),
+        with safe_socket_connect(
+            hostname,
+            port,
             timeout=5,
         ) as raw_socket:
             with context.wrap_socket(
@@ -311,16 +315,44 @@ def analyze_certificate(
             ) as tls_socket:
                 certificate = tls_socket.getpeercert()
 
-        if certificate:
+        expiry_value = certificate.get("notAfter")
+
+        if not expiry_value:
+            raise ValueError("Certificate expiry date unavailable")
+
+        expiry_timestamp = ssl.cert_time_to_seconds(expiry_value)
+        expiry_date = datetime.fromtimestamp(
+            expiry_timestamp,
+            tz=timezone.utc,
+        )
+        now = datetime.now(timezone.utc)
+
+        if expiry_date <= now:
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "title": "Certificate Expiry - expired",
+                    "description": (
+                        f"The TLS certificate expired at "
+                        f"{expiry_date.isoformat()}."
+                    ),
+                    "recommendation": (
+                        "Renew the TLS certificate and verify "
+                        "that the server presents the renewed certificate."
+                    ),
+                }
+            )
+        else:
             findings.append(
                 {
                     "severity": "INFO",
                     "title": "Certificate Expiry - valid",
                     "description": (
-                        "A TLS certificate was successfully retrieved."
+                        f"The TLS certificate is not expired. "
+                        f"Expiration date: {expiry_date.isoformat()}."
                     ),
                     "recommendation": (
-                        "Continue monitoring certificate validity and renewal."
+                        "Renew the certificate before its expiration date."
                     ),
                 }
             )
@@ -331,10 +363,12 @@ def analyze_certificate(
                 "severity": "INFO",
                 "title": "Certificate Expiry - unavailable",
                 "description": (
-                    "The scanner could not retrieve certificate expiry information."
+                    "The scanner could not verify the certificate "
+                    "expiry date. This does not mean the certificate is valid."
                 ),
                 "recommendation": (
-                    "Verify TLS certificate configuration manually."
+                    "Check the certificate chain, TLS connection, "
+                    "and certificate expiry date."
                 ),
             }
         )

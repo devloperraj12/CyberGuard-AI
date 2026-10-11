@@ -6,8 +6,10 @@ from google import genai
 from pydantic import BaseModel, Field
 
 
-load_dotenv()
+from pathlib import Path
 
+ENV_FILE = Path(__file__).resolve().parent / ".env"
+load_dotenv(ENV_FILE, override=False)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
