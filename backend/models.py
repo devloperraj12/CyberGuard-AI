@@ -4,12 +4,8 @@ from sqlalchemy import DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from database import Base
+from backend.database import Base
 
-
-# =========================================================
-# User Model
-# =========================================================
 
 class User(Base):
     __tablename__ = "users"
@@ -38,16 +34,76 @@ class User(Base):
         nullable=False,
     )
 
+    # User → Scans
     scans: Mapped[list["Scan"]] = relationship(
         "Scan",
         back_populates="user",
         cascade="all, delete-orphan",
     )
 
+    # User → Projects
+    projects: Mapped[list["Project"]] = relationship(
+        "Project",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
 
-# =========================================================
-# Scan Model
-# =========================================================
+
+class Project(Base):
+    __tablename__ = "projects"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
+
+    name: Mapped[str] = mapped_column(
+        String(150),
+        nullable=False,
+    )
+
+    description: Mapped[str | None] = mapped_column(
+        String(1000),
+        nullable=True,
+    )
+
+    target_url: Mapped[str] = mapped_column(
+        String(2048),
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    # Project → User
+    user: Mapped["User"] = relationship(
+        "User",
+        back_populates="projects",
+    )
+
+    # Project → Scans
+    scans: Mapped[list["Scan"]] = relationship(
+        "Scan",
+        back_populates="project",
+    )
+
 
 class Scan(Base):
     __tablename__ = "scans"
@@ -58,10 +114,19 @@ class Scan(Base):
         autoincrement=True,
     )
 
-    # User who owns this scan
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id"),
         nullable=False,
+        index=True,
+    )
+
+    # Project association.
+    #
+    # Nullable for now so existing scans continue
+    # working while we migrate them into projects.
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("projects.id"),
+        nullable=True,
         index=True,
     )
 
@@ -96,13 +161,43 @@ class Scan(Base):
         default=list,
     )
 
+    # Category-based security scores.
+    # Example:
+    # {
+    #     "Security Headers": 50,
+    #     "Transport Security": 100,
+    #     "Cookie Security": 100,
+    #     "Network Exposure": 100,
+    #     "DNS Security": 100,
+    #     "Information Disclosure": 100,
+    #     "CORS": 100,
+    #     "HTTP Methods": 100
+    # }
+    category_scores: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+
+    # AI-generated analysis is stored with the scan.
+    ai_analysis: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
 
+    # Scan → User
     user: Mapped["User"] = relationship(
         "User",
+        back_populates="scans",
+    )
+
+    # Scan → Project
+    project: Mapped["Project | None"] = relationship(
+        "Project",
         back_populates="scans",
     )

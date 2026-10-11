@@ -1,7 +1,7 @@
 import ipaddress
 import socket
 from urllib.parse import urljoin, urlparse
-
+from backend.safe_network import SafeHTTPTransport, safe_socket_connect
 import httpx
 
 
@@ -233,10 +233,11 @@ def analyze_tls(
                 port = response.url.port or 443
                 context = httpx.create_ssl_context()
 
-                with socket.create_connection(
-                    (hostname, port),
-                    timeout=5,
-                ) as raw_socket:
+                with safe_socket_connect(
+    hostname,
+    port,
+    timeout=5,
+) as raw_socket:
                     with context.wrap_socket(
                         raw_socket,
                         server_hostname=hostname,
@@ -615,6 +616,281 @@ def analyze_http_methods(
 
     return findings
 
+def analyze_dns(
+    target_url: str,
+) -> list[dict]:
+    """
+    Perform a safe DNS resolution check.
+
+    This only resolves the target hostname and does not
+    perform zone transfers, enumeration, or intrusive DNS
+    operations.
+    """
+
+    findings = []
+
+    parsed = urlparse(target_url)
+    hostname = parsed.hostname
+
+    if not hostname:
+        return findings
+
+    try:
+        address_info = socket.getaddrinfo(
+            hostname,
+            None,
+            type=socket.SOCK_STREAM,
+        )
+
+        ipv4_addresses = sorted(
+            {
+                result[4][0]
+                for result in address_info
+                if ":" not in result[4][0]
+            }
+        )
+
+        ipv6_addresses = sorted(
+            {
+                result[4][0]
+                for result in address_info
+                if ":" in result[4][0]
+            }
+        )
+
+        address_parts = []
+
+        if ipv4_addresses:
+            address_parts.append(
+                "IPv4: " + ", ".join(ipv4_addresses)
+            )
+
+        if ipv6_addresses:
+            address_parts.append(
+                "IPv6: " + ", ".join(ipv6_addresses)
+            )
+
+        if address_parts:
+            findings.append(
+                {
+                    "severity": "INFO",
+                    "title": "DNS Resolution - successful",
+                    "description": (
+                        f"The hostname {hostname} resolved successfully. "
+                        + " | ".join(address_parts)
+                    ),
+                    "recommendation": (
+                        "Continue monitoring DNS records and ensure that "
+                        "resolved addresses belong to trusted infrastructure."
+                    ),
+                }
+            )
+        else:
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "title": "DNS Resolution - no address found",
+                    "description": (
+                        f"The hostname {hostname} did not return "
+                        "a usable IP address."
+                    ),
+                    "recommendation": (
+                        "Verify that the domain has valid A or AAAA "
+                        "records and that DNS configuration is correct."
+                    ),
+                }
+            )
+
+    except socket.gaierror:
+        findings.append(
+            {
+                "severity": "MEDIUM",
+                "title": "DNS Resolution - failed",
+                "description": (
+                    f"The hostname {hostname} could not be resolved."
+                ),
+                "recommendation": (
+                    "Verify the domain's DNS configuration and "
+                    "authoritative name server records."
+                ),
+            }
+        )
+
+    except Exception:
+        findings.append(
+            {
+                "severity": "INFO",
+                "title": "DNS Analysis - unavailable",
+                "description": (
+                    "The scanner could not complete the DNS resolution check."
+                ),
+                "recommendation": (
+                    "Review DNS resolution and configuration manually."
+                ),
+            }
+        )
+
+    return findings
+def analyze_network_exposure(
+    target_url: str,
+) -> list[dict]:
+    """
+    Perform a limited, non-destructive TCP connectivity check
+    against common web ports.
+
+    This does not perform service enumeration, exploitation,
+    brute force, or aggressive port scanning.
+    """
+
+    findings = []
+
+    parsed = urlparse(target_url)
+    hostname = parsed.hostname
+
+    if not hostname:
+        return findings
+
+    ports = {
+        80: "HTTP",
+        443: "HTTPS",
+        8080: "HTTP alternate",
+        8443: "HTTPS alternate",
+    }
+
+    for port, service_name in ports.items():
+        try:
+            with safe_socket_connect(
+    hostname,
+    port,
+    timeout=2,
+):
+                findings.append(
+                    {
+                        "severity": "INFO",
+                        "title": f"Port {port} - reachable",
+                        "description": (
+                            f"TCP port {port} ({service_name}) "
+                            f"accepted a connection on {hostname}."
+                        ),
+                        "recommendation": (
+                            f"Verify that port {port} is intentionally "
+                            "exposed and protected by appropriate "
+                            "application and network controls."
+                        ),
+                    }
+                )
+
+        except (socket.timeout, ConnectionRefusedError, OSError):
+            findings.append(
+                {
+                    "severity": "INFO",
+                    "title": f"Port {port} - not reachable",
+                    "description": (
+                        f"TCP port {port} ({service_name}) "
+                        f"did not accept a connection."
+                    ),
+                    "recommendation": (
+                        "No action is required if this port is not "
+                        "intended to be publicly accessible."
+                    ),
+                }
+            )
+
+    return findings
+def calculate_category_scores(findings: list[dict]) -> dict:
+    """
+    Calculate security scores for major assessment categories.
+
+    Scores range from 0 to 100.
+    Category penalties use the same severity weights
+    as the overall security score.
+    """
+
+    categories = {
+        "Security Headers": 100,
+        "Transport Security": 100,
+        "Cookie Security": 100,
+        "Network Exposure": 100,
+        "DNS Security": 100,
+        "Information Disclosure": 100,
+        "CORS": 100,
+        "HTTP Methods": 100,
+    }
+
+    penalties = {
+        "HIGH": 15,
+        "MEDIUM": 8,
+        "LOW": 4,
+        "INFO": 0,
+    }
+
+    security_header_names = {
+        "strict-transport-security",
+        "content-security-policy",
+        "x-content-type-options",
+        "x-frame-options",
+        "referrer-policy",
+    }
+
+    for finding in findings:
+        severity = finding.get("severity", "INFO").upper()
+        title = finding.get("title", "").lower()
+
+        penalty = penalties.get(severity, 0)
+
+        # Security Headers
+        if any(
+            header_name in title
+            for header_name in security_header_names
+        ):
+            category = "Security Headers"
+
+        # Transport Security
+        elif (
+            "https" in title
+            or "tls" in title
+            or "certificate" in title
+        ):
+            category = "Transport Security"
+
+        # Cookie Security
+        elif "cookie" in title:
+            category = "Cookie Security"
+
+        # Network Exposure
+        elif "port" in title:
+            category = "Network Exposure"
+
+        # DNS Security
+        elif "dns" in title:
+            category = "DNS Security"
+
+        # Information Disclosure
+        elif (
+            "server header" in title
+            or "x-powered-by" in title
+            or "disclos" in title
+        ):
+            category = "Information Disclosure"
+
+        # CORS
+        elif "cors" in title:
+            category = "CORS"
+
+        # HTTP Methods
+        elif "http method" in title or "trace method" in title:
+            category = "HTTP Methods"
+
+        else:
+            continue
+
+        categories[category] = max(
+            0,
+            categories[category] - penalty,
+        )
+
+    return categories
+
 
 def calculate_security_score(
     findings: list[dict],
@@ -730,11 +1006,13 @@ def run_basic_assessment(
     )
 
     with httpx.Client(
-        timeout=timeout,
-        headers={
-            "User-Agent": "CyberGuard-AI-Security-Scanner/1.0",
-        },
-    ) as client:
+    transport=SafeHTTPTransport(),
+    trust_env=False,
+    timeout=timeout,
+    headers={
+        "User-Agent": "CyberGuard-AI-Security-Scanner/1.0",
+    },
+) as client:
 
         response = fetch_with_safe_redirects(
             client,
@@ -780,7 +1058,23 @@ def run_basic_assessment(
             )
         )
 
+        findings.extend(
+            analyze_dns(
+                str(response.url),
+            )
+        )
+
+        findings.extend(
+            analyze_network_exposure(
+                str(response.url),
+            )
+        )
+
         score = calculate_security_score(
+            findings
+        )
+
+        category_scores = calculate_category_scores(
             findings
         )
 
@@ -789,6 +1083,7 @@ def run_basic_assessment(
             "target": str(response.url),
             "http_status": response.status_code,
             "security_score": score,
+            "category_scores": category_scores,
             "findings": findings,
             "message": (
                 "Basic security assessment completed successfully."

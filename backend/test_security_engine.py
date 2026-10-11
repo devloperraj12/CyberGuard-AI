@@ -1,26 +1,31 @@
-from security_engine import run_basic_assessment
+from backend.security_engine import run_basic_assessment
 
 
-target = "https://example.com"
+def main() -> None:
+    target = "https://example.com"
 
-result = run_basic_assessment(target)
+    result = run_basic_assessment(target)
 
-print("\n===== CyberGuard AI Security Assessment =====")
-print(f"Status: {result.get('status')}")
-print(f"Target: {result.get('target')}")
-print(f"HTTP Status: {result.get('http_status')}")
-print(f"Security Score: {result.get('security_score')}")
+    print("\n===== CyberGuard AI Security Assessment =====")
+    print(f"Status: {result['status']}")
+    print(f"Target: {result['target']}")
+    print(f"HTTP Status: {result['http_status']}")
+    print(f"Security Score: {result['security_score']}")
 
-print("\n----- Findings -----")
+    print("\n----- Category Scores -----")
 
-for finding in result.get("findings", []):
-    finding_name = finding.get(
-        "header",
-        finding.get("name", "Unknown Check")
-    )
+    for category, score in result.get("category_scores", {}).items():
+        print(f"{category}: {score}/100")
 
-    print(
-        f"[{finding.get('severity', 'info').upper()}] "
-        f"{finding_name} - "
-        f"{finding.get('status', 'unknown')}"
-    )
+    print("\n----- Findings -----")
+
+    for finding in result["findings"]:
+        print(
+            f"[{finding['severity']}] "
+            f"{finding['title']} - "
+            f"{finding['description']}"
+        )
+
+
+if __name__ == "__main__":
+    main()

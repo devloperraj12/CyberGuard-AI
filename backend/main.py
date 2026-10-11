@@ -6,20 +6,28 @@ from pydantic import BaseModel, HttpUrl
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ai_analyst import analyze_scan_with_ai
-from auth import (
+from backend.ai_analyst import analyze_scan_with_ai
+from backend.auth import (
     create_access_token,
     get_current_user,
     hash_password,
     verify_password,
 )
-from database import Base, engine, get_db
-from models import Scan, User
-from security_engine import run_basic_assessment
+from backend.database import Base, engine, get_db
+from backend.models import Project, Scan, User
+from backend.security_engine import run_basic_assessment
 
+
+# ============================================================
+# Database initialization
+# ============================================================
 
 Base.metadata.create_all(bind=engine)
 
+
+# ============================================================
+# FastAPI application
+# ============================================================
 
 app = FastAPI(
     title="CyberGuard AI API",
@@ -27,9 +35,13 @@ app = FastAPI(
         "AI-powered authorized web security "
         "assessment platform."
     ),
-    version="0.6.0",
+    version="0.8.0",
 )
 
+
+# ============================================================
+# CORS
+# ============================================================
 
 app.add_middleware(
     CORSMiddleware,
@@ -46,6 +58,11 @@ app.add_middleware(
 )
 
 
+# ============================================================
+# Request Models
+# ============================================================
+
+
 class RegisterRequest(BaseModel):
     email: str
     password: str
@@ -60,13 +77,31 @@ class ScanRequest(BaseModel):
     target_url: HttpUrl
     scan_type: Literal["basic"] = "basic"
     authorized: bool
+    project_id: int | None = None
+
+
+class ProjectCreateRequest(BaseModel):
+    name: str
+    description: str | None = None
+    target_url: HttpUrl
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: str
+    description: str | None = None
+    target_url: HttpUrl
+
+
+# ============================================================
+# Root / Health
+# ============================================================
 
 
 @app.get("/")
 def root():
     return {
         "message": "CyberGuard AI API is running.",
-        "version": "0.6.0",
+        "version": "0.8.0",
     }
 
 
@@ -75,6 +110,11 @@ def health():
     return {
         "status": "healthy",
     }
+
+
+# ============================================================
+# Authentication
+# ============================================================
 
 
 @app.post("/auth/register")
@@ -178,6 +218,11 @@ def get_me(
     }
 
 
+# ============================================================
+# Security Scan
+# ============================================================
+
+
 @app.post("/scan")
 def scan_target(
     request: ScanRequest,
@@ -186,6 +231,10 @@ def scan_target(
     ),
     db: Session = Depends(get_db),
 ):
+    # --------------------------------------------------------
+    # Authorization check
+    # --------------------------------------------------------
+
     if not request.authorized:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -196,6 +245,10 @@ def scan_target(
             ),
         )
 
+    # --------------------------------------------------------
+    # Scan type validation
+    # --------------------------------------------------------
+
     if request.scan_type != "basic":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -204,7 +257,35 @@ def scan_target(
             ),
         )
 
+    # --------------------------------------------------------
+    # Project ownership validation
+    # --------------------------------------------------------
+
+    project = None
+
+    if request.project_id is not None:
+        project = db.scalar(
+            select(Project).where(
+                Project.id == request.project_id,
+                Project.user_id == current_user.id,
+            )
+        )
+
+        if project is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found.",
+            )
+
+    # --------------------------------------------------------
+    # Target URL
+    # --------------------------------------------------------
+
     target_url = str(request.target_url)
+
+    # --------------------------------------------------------
+    # Run security assessment
+    # --------------------------------------------------------
 
     try:
         result = run_basic_assessment(
@@ -230,8 +311,13 @@ def scan_target(
             ),
         ) from exc
 
+    # --------------------------------------------------------
+    # Save scan in database
+    # --------------------------------------------------------
+
     scan_record = Scan(
         user_id=current_user.id,
+        project_id=request.project_id,
         target=result["target"],
         scan_type=request.scan_type,
         status=result["status"],
@@ -245,40 +331,90 @@ def scan_target(
             "findings",
             [],
         ),
+        category_scores=result.get(
+            "category_scores",
+            {},
+        ),
+        ai_analysis=None,
     )
 
     db.add(scan_record)
     db.commit()
     db.refresh(scan_record)
 
+    # --------------------------------------------------------
+    # Return scan result
+    # --------------------------------------------------------
+
     return {
         "scan_id": scan_record.id,
+        "project_id": scan_record.project_id,
         "status": scan_record.status,
         "target": scan_record.target,
         "http_status": scan_record.http_status,
         "security_score": (
             scan_record.security_score
         ),
+        "category_scores": (
+            scan_record.category_scores
+        ),
         "findings": scan_record.findings,
+        "ai_analysis": scan_record.ai_analysis,
         "message": result.get(
             "message"
         ),
     }
 
 
+# ============================================================
+# Scan History
+# ============================================================
+
+
 @app.get("/scans")
 def get_scans(
+    project_id: int | None = None,
     current_user: User = Depends(
         get_current_user
     ),
     db: Session = Depends(get_db),
 ):
-    scans = db.scalars(
-        select(Scan)
-        .where(
-            Scan.user_id == current_user.id
+    # --------------------------------------------------------
+    # Base query: only current user's scans
+    # --------------------------------------------------------
+
+    query = select(Scan).where(
+        Scan.user_id == current_user.id
+    )
+
+    # --------------------------------------------------------
+    # Optional project filter
+    # --------------------------------------------------------
+
+    if project_id is not None:
+        project = db.scalar(
+            select(Project).where(
+                Project.id == project_id,
+                Project.user_id == current_user.id,
+            )
         )
-        .order_by(
+
+        if project is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found.",
+            )
+
+        query = query.where(
+            Scan.project_id == project_id
+        )
+
+    # --------------------------------------------------------
+    # Get scans
+    # --------------------------------------------------------
+
+    scans = db.scalars(
+        query.order_by(
             Scan.created_at.desc()
         )
     ).all()
@@ -286,20 +422,24 @@ def get_scans(
     return [
         {
             "id": scan.id,
+            "project_id": scan.project_id,
             "target": scan.target,
             "scan_type": scan.scan_type,
             "status": scan.status,
-            "security_score": (
-                scan.security_score
-            ),
-            "http_status": (
-                scan.http_status
-            ),
+            "security_score": scan.security_score,
+            "http_status": scan.http_status,
+            "category_scores": scan.category_scores,
             "findings": scan.findings,
+            "ai_analysis": scan.ai_analysis,
             "created_at": scan.created_at,
         }
         for scan in scans
     ]
+
+
+# ============================================================
+# Individual Scan
+# ============================================================
 
 
 @app.get("/scans/{scan_id}")
@@ -325,6 +465,7 @@ def get_scan(
 
     return {
         "id": scan.id,
+        "project_id": scan.project_id,
         "target": scan.target,
         "scan_type": scan.scan_type,
         "status": scan.status,
@@ -334,9 +475,16 @@ def get_scan(
         "http_status": (
             scan.http_status
         ),
+        "category_scores": scan.category_scores,
         "findings": scan.findings,
+        "ai_analysis": scan.ai_analysis,
         "created_at": scan.created_at,
     }
+
+
+# ============================================================
+# AI Security Analysis
+# ============================================================
 
 
 @app.post("/scans/{scan_id}/analyze")
@@ -347,6 +495,10 @@ def analyze_scan(
     ),
     db: Session = Depends(get_db),
 ):
+    # --------------------------------------------------------
+    # Find scan belonging to current user
+    # --------------------------------------------------------
+
     scan = db.scalar(
         select(Scan).where(
             Scan.id == scan_id,
@@ -360,45 +512,75 @@ def analyze_scan(
             detail="Scan not found.",
         )
 
+    # --------------------------------------------------------
+    # Return existing AI analysis if already generated
+    # --------------------------------------------------------
+
+    if scan.ai_analysis:
+        return {
+            "scan_id": scan.id,
+            "model": "AI Security Analyst",
+            "analysis": scan.ai_analysis,
+            "cached": True,
+        }
+
+    # --------------------------------------------------------
+    # Send scanner findings to Gemini
+    # --------------------------------------------------------
+
     try:
         analysis = analyze_scan_with_ai(
             target=scan.target,
-            security_score=(
-                scan.security_score
-            ),
+            security_score=scan.security_score,
             findings=scan.findings,
         )
 
     except RuntimeError as exc:
         message = str(exc)
 
-        if (
-            "OPENAI_API_KEY"
-            in message
-        ):
+        # Gemini configuration error
+        if "GEMINI_API_KEY" in message:
             raise HTTPException(
-                status_code=503,
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=(
                     "AI analysis is not configured. "
-                    "Add OPENAI_API_KEY to backend/.env."
+                    "Add GEMINI_API_KEY to backend/.env."
                 ),
             ) from exc
 
+        # Other Gemini/API errors
         raise HTTPException(
-            status_code=502,
+            status_code=status.HTTP_502_BAD_GATEWAY,
             detail=(
                 "The AI security analysis could not "
                 "be completed."
             ),
         ) from exc
 
+    # --------------------------------------------------------
+    # Save AI analysis to database
+    # --------------------------------------------------------
+
+    scan.ai_analysis = analysis.model_dump()
+
+    db.commit()
+    db.refresh(scan)
+
+    # --------------------------------------------------------
+    # Return saved AI analysis
+    # --------------------------------------------------------
+
     return {
         "scan_id": scan.id,
-        "model": (
-            "AI Security Analyst"
-        ),
-        "analysis": analysis.model_dump(),
+        "model": "AI Security Analyst",
+        "analysis": scan.ai_analysis,
+        "cached": False,
     }
+
+
+# ============================================================
+# Delete One Scan
+# ============================================================
 
 
 @app.delete("/scans/{scan_id}")
@@ -430,18 +612,56 @@ def delete_scan(
     }
 
 
+# ============================================================
+# Delete All Scans
+# ============================================================
+
+
 @app.delete("/scans")
 def delete_all_scans(
+    project_id: int | None = None,
     current_user: User = Depends(
         get_current_user
     ),
     db: Session = Depends(get_db),
 ):
-    scans = db.scalars(
-        select(Scan).where(
-            Scan.user_id == current_user.id
+    # --------------------------------------------------------
+    # Base query
+    # --------------------------------------------------------
+
+    query = select(Scan).where(
+        Scan.user_id == current_user.id
+    )
+
+    # --------------------------------------------------------
+    # Optional project filter
+    # --------------------------------------------------------
+
+    if project_id is not None:
+        project = db.scalar(
+            select(Project).where(
+                Project.id == project_id,
+                Project.user_id == current_user.id,
+            )
         )
-    ).all()
+
+        if project is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found.",
+            )
+
+        query = query.where(
+            Scan.project_id == project_id
+        )
+
+    # --------------------------------------------------------
+    # Delete matching scans
+    # --------------------------------------------------------
+
+    scans = db.scalars(query).all()
+
+    deleted_count = len(scans)
 
     for scan in scans:
         db.delete(scan)
@@ -449,8 +669,225 @@ def delete_all_scans(
     db.commit()
 
     return {
-        "message": (
-            "All scans deleted successfully."
+        "message": "Scans deleted successfully.",
+        "deleted_count": deleted_count,
+    }
+
+
+# ============================================================
+# PROJECT ENDPOINTS
+# ============================================================
+
+
+# ------------------------------------------------------------
+# Create Project
+# ------------------------------------------------------------
+
+
+@app.post("/projects")
+def create_project(
+    request: ProjectCreateRequest,
+    current_user: User = Depends(
+        get_current_user
+    ),
+    db: Session = Depends(get_db),
+):
+    name = request.name.strip()
+
+    if not name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Project name cannot be empty.",
+        )
+
+    project = Project(
+        user_id=current_user.id,
+        name=name,
+        description=(
+            request.description.strip()
+            if request.description
+            else None
         ),
-        "deleted_count": len(scans),
+        target_url=str(
+            request.target_url
+        ),
+    )
+
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+
+    return {
+        "id": project.id,
+        "name": project.name,
+        "description": project.description,
+        "target_url": project.target_url,
+        "created_at": project.created_at,
+        "updated_at": project.updated_at,
+    }
+
+
+# ------------------------------------------------------------
+# Get Projects
+# ------------------------------------------------------------
+
+
+@app.get("/projects")
+def get_projects(
+    current_user: User = Depends(
+        get_current_user
+    ),
+    db: Session = Depends(get_db),
+):
+    projects = db.scalars(
+        select(Project)
+        .where(
+            Project.user_id == current_user.id
+        )
+        .order_by(
+            Project.created_at.desc()
+        )
+    ).all()
+
+    return [
+        {
+            "id": project.id,
+            "name": project.name,
+            "description": project.description,
+            "target_url": project.target_url,
+            "created_at": project.created_at,
+            "updated_at": project.updated_at,
+        }
+        for project in projects
+    ]
+
+
+# ------------------------------------------------------------
+# Get Single Project
+# ------------------------------------------------------------
+
+
+@app.get("/projects/{project_id}")
+def get_project(
+    project_id: int,
+    current_user: User = Depends(
+        get_current_user
+    ),
+    db: Session = Depends(get_db),
+):
+    project = db.scalar(
+        select(Project).where(
+            Project.id == project_id,
+            Project.user_id == current_user.id,
+        )
+    )
+
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found.",
+        )
+
+    return {
+        "id": project.id,
+        "name": project.name,
+        "description": project.description,
+        "target_url": project.target_url,
+        "created_at": project.created_at,
+        "updated_at": project.updated_at,
+    }
+
+
+# ------------------------------------------------------------
+# Update Project
+# ------------------------------------------------------------
+
+
+@app.put("/projects/{project_id}")
+def update_project(
+    project_id: int,
+    request: ProjectUpdateRequest,
+    current_user: User = Depends(
+        get_current_user
+    ),
+    db: Session = Depends(get_db),
+):
+    project = db.scalar(
+        select(Project).where(
+            Project.id == project_id,
+            Project.user_id == current_user.id,
+        )
+    )
+
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found.",
+        )
+
+    name = request.name.strip()
+
+    if not name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Project name cannot be empty.",
+        )
+
+    project.name = name
+
+    project.description = (
+        request.description.strip()
+        if request.description
+        else None
+    )
+
+    project.target_url = str(
+        request.target_url
+    )
+
+    db.commit()
+    db.refresh(project)
+
+    return {
+        "id": project.id,
+        "name": project.name,
+        "description": project.description,
+        "target_url": project.target_url,
+        "created_at": project.created_at,
+        "updated_at": project.updated_at,
+    }
+
+
+# ------------------------------------------------------------
+# Delete Project
+# ------------------------------------------------------------
+
+
+@app.delete("/projects/{project_id}")
+def delete_project(
+    project_id: int,
+    current_user: User = Depends(
+        get_current_user
+    ),
+    db: Session = Depends(get_db),
+):
+    project = db.scalar(
+        select(Project).where(
+            Project.id == project_id,
+            Project.user_id == current_user.id,
+        )
+    )
+
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found.",
+        )
+
+    db.delete(project)
+    db.commit()
+
+    return {
+        "message": "Project deleted successfully.",
+        "project_id": project_id,
     }

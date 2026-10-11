@@ -24,6 +24,8 @@ type Scan = {
   security_score: number | null;
   http_status: number | null;
   findings: Finding[];
+category_scores?: Record<string, number> | null;
+  ai_analysis: AIAnalysis | null;
   created_at: string;
 };
 
@@ -115,6 +117,8 @@ export default function ScanReportPage() {
       const data = await response.json();
 
       setScan(data);
+      setAiAnalysis(data.ai_analysis ?? null);
+      setAiGenerated(Boolean(data.ai_analysis));
     } catch (err) {
       console.error(err);
 
@@ -166,10 +170,9 @@ export default function ScanReportPage() {
       setAiGenerated(true);
     } catch (err) {
       console.error(err);
-
       setAiError(
         err instanceof Error
-          ? err.message
+        ? err.message
           : "Failed to generate AI security analysis."
       );
     } finally {
@@ -231,8 +234,20 @@ export default function ScanReportPage() {
         return "border-slate-700 bg-slate-800/50 text-slate-300";
     }
   }
+  function getCategoryScoreClasses(score: number) {
+    if (score >= 80) return "text-emerald-400";
+    if (score >= 60) return "text-yellow-400";
+    return "text-red-400";
+  }
 
-  function getPriorityClasses(priority: string) {
+  function getCategoryScoreLabel(score: number) {
+    if (score >= 80) return "Strong";
+    if (score >= 60) return "Moderate";
+    if (score >= 40) return "Needs Attention";
+    return "Weak";
+  }
+
+      function getPriorityClasses(priority: string) {
     switch (priority.toUpperCase()) {
       case "P1":
       case "CRITICAL":
@@ -393,6 +408,75 @@ export default function ScanReportPage() {
             </div>
 
             {/* Risk Summary */}
+            {/* Security Category Scores */}
+            <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6 md:p-8">
+              <h2 className="text-2xl font-bold">
+                Security Category Scores
+              </h2>
+
+              <p className="mt-2 text-slate-400">
+                Category-level security scores from this assessment.
+              </p>
+
+              {!scan.category_scores ||
+              Object.keys(scan.category_scores).length === 0 ? (
+                <p className="mt-5 rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-slate-400">
+                  Category scores are not available for this scan.
+                  Run a new scan to generate category scores.
+                </p>
+              ) : (
+                <div className="mt-6 grid gap-5 md:grid-cols-2">
+                  {Object.entries(scan.category_scores).map(
+                    ([category, rawScore]) => {
+                      const score = Math.max(
+                        0,
+                        Math.min(100, Number(rawScore) || 0)
+                      );
+
+                      return (
+                        <div
+                          key={category}
+                          className="rounded-xl border border-slate-800 bg-slate-950/60 p-5"
+                        >
+                          <div className="flex items-start justify-between gap-4">
+                            <h3 className="font-semibold text-slate-200">
+                              {category}
+                            </h3>
+
+                            <span
+                              className={`shrink-0 text-lg font-bold ${getCategoryScoreClasses(score)}`}
+                            >
+                              {score}/100
+                            </span>
+                          </div>
+
+                          <div className="mt-4 h-3 overflow-hidden rounded-full bg-slate-800">
+                            <div
+                              className={`h-full rounded-full ${
+                                score >= 80
+                                  ? "bg-emerald-400"
+                                  : score >= 60
+                                    ? "bg-yellow-400"
+                                    : "bg-red-400"
+                              }`}
+                              style={{ width: `${score}%` }}
+                            />
+                          </div>
+
+                          <p
+                            className={`mt-3 text-sm ${getCategoryScoreClasses(score)}`}
+                          >
+                            {getCategoryScoreLabel(score)}
+                          </p>
+                        </div>
+                      );
+                    }
+                  )}
+                </div>
+              )}
+            </section>
+
+
             <div>
               <h2 className="mb-6 text-3xl font-bold">
                 Risk Summary

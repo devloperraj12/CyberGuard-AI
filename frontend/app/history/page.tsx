@@ -1,4 +1,5 @@
 "use client";
+
 import { API_BASE_URL } from "../../lib/config";
 import { useEffect, useState } from "react";
 import Link from "next/link";
@@ -24,24 +25,58 @@ type Scan = {
   http_status: number | null;
   findings: Finding[];
   created_at: string;
+  project_id?: number | null;
+};
+
+type Project = {
+  id: number;
+  name: string;
+  description: string | null;
+  target_url: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export default function HistoryPage() {
   const [scans, setScans] = useState<Scan[]>([]);
+  const [project, setProject] = useState<Project | null>(null);
+  const [projectId, setProjectId] = useState<number | null>(null);
+
   const [loading, setLoading] = useState(true);
+  const [projectLoading, setProjectLoading] = useState(false);
   const [error, setError] = useState("");
 
+  /*
+   * Read project_id from the URL.
+   *
+   * Example:
+   * /history?project_id=2
+   */
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get("project_id");
+
+    if (id) {
+      const parsedId = Number(id);
+
+      if (!Number.isNaN(parsedId)) {
+        setProjectId(parsedId);
+        loadProject(parsedId);
+        loadScans(parsedId);
+        return;
+      }
+    }
+
     loadScans();
   }, []);
 
-  async function loadScans() {
+  async function loadProject(id: number) {
     try {
-      setLoading(true);
+      setProjectLoading(true);
       setError("");
 
       const response = await fetch(
-        `${API_BASE_URL}/scans`,
+        `${API_BASE_URL}/projects/${id}`,
         {
           method: "GET",
           headers: {
@@ -49,6 +84,48 @@ export default function HistoryPage() {
           },
         }
       );
+
+      if (response.status === 401) {
+        clearAuth();
+        window.location.href = "/login";
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error("Unable to load project.");
+      }
+
+      const data = await response.json();
+      setProject(data);
+    } catch (err) {
+      console.error(err);
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to load project."
+      );
+    } finally {
+      setProjectLoading(false);
+    }
+  }
+
+  async function loadScans(selectedProjectId?: number) {
+    try {
+      setLoading(true);
+      setError("");
+
+      const url =
+        selectedProjectId !== undefined
+          ? `${API_BASE_URL}/scans?project_id=${selectedProjectId}`
+          : `${API_BASE_URL}/scans`;
+
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          ...getAuthHeaders(),
+        },
+      });
 
       if (response.status === 401) {
         clearAuth();
@@ -88,6 +165,8 @@ export default function HistoryPage() {
     }
 
     try {
+      setError("");
+
       const response = await fetch(
         `${API_BASE_URL}/scans/${scanId}`,
         {
@@ -127,24 +206,31 @@ export default function HistoryPage() {
   }
 
   async function deleteAllScans() {
-    const confirmed = window.confirm(
-      "Are you sure you want to delete all scan history?"
-    );
+    const message = projectId
+      ? `Are you sure you want to delete all scan history for ${
+          project?.name ?? "this project"
+        }?`
+      : "Are you sure you want to delete all scan history?";
+
+    const confirmed = window.confirm(message);
 
     if (!confirmed) {
       return;
     }
 
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/scans`,
-        {
-          method: "DELETE",
-          headers: {
-            ...getAuthHeaders(),
-          },
-        }
-      );
+      setError("");
+
+      const url = projectId
+        ? `${API_BASE_URL}/scans?project_id=${projectId}`
+        : `${API_BASE_URL}/scans`;
+
+      const response = await fetch(url, {
+        method: "DELETE",
+        headers: {
+          ...getAuthHeaders(),
+        },
+      });
 
       if (response.status === 401) {
         clearAuth();
@@ -178,9 +264,7 @@ export default function HistoryPage() {
     }
   }
 
-  function getScoreClasses(
-    score: number | null
-  ) {
+  function getScoreClasses(score: number | null) {
     if (score === null) {
       return "text-slate-400";
     }
@@ -262,10 +346,61 @@ export default function HistoryPage() {
               onClick={deleteAllScans}
               className="rounded-xl border border-red-500/30 bg-red-500/5 px-5 py-3 font-semibold text-red-400 transition hover:bg-red-500/10"
             >
-              Clear All History
+              {projectId
+                ? "Clear Project History"
+                : "Clear All History"}
             </button>
           )}
         </div>
+
+        {/* Project Context */}
+        {projectId && (
+          <div className="mb-8 rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-6">
+            {projectLoading ? (
+              <p className="text-sm text-slate-400">
+                Loading project...
+              </p>
+            ) : project ? (
+              <div className="flex flex-col justify-between gap-5 md:flex-row md:items-center">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-cyan-400">
+                    Project History
+                  </p>
+
+                  <h2 className="mt-2 text-2xl font-bold text-white">
+                    {project.name}
+                  </h2>
+
+                  <p className="mt-1 break-all text-sm text-slate-400">
+                    {project.target_url}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-3">
+  <button
+    type="button"
+    onClick={() => {
+      window.location.href = "/history";
+    }}
+    className="rounded-lg border border-cyan-500/40 px-4 py-2.5 text-sm font-semibold text-cyan-400 transition hover:bg-cyan-500/10"
+  >
+    View All History
+  </button>
+
+  <button
+    type="button"
+    onClick={() => {
+      window.location.href = `/scan?project_id=${project.id}`;
+    }}
+    className="rounded-lg bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400"
+  >
+    Scan Project
+  </button>
+</div>
+              </div>
+            ) : null}
+          </div>
+        )}
 
         {/* Error */}
         {error && (
@@ -287,19 +422,28 @@ export default function HistoryPage() {
           /* Empty state */
           <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-12 text-center">
             <h2 className="text-2xl font-semibold">
-              No scans yet
+              {projectId
+                ? "No scans for this project"
+                : "No scans yet"}
             </h2>
 
             <p className="mt-3 text-slate-400">
-              Run your first authorized security assessment
-              to see it here.
+              {projectId
+                ? "Run a security assessment for this project to see it here."
+                : "Run your first authorized security assessment to see it here."}
             </p>
 
             <Link
-              href="/scan"
+              href={
+                projectId
+                  ? `/scan?project_id=${projectId}`
+                  : "/scan"
+              }
               className="mt-6 inline-block rounded-xl bg-cyan-500 px-6 py-4 font-semibold text-slate-950 transition hover:bg-cyan-400"
             >
-              Start New Scan
+              {projectId
+                ? "Scan Project"
+                : "Start New Scan"}
             </Link>
           </div>
         ) : (
@@ -372,9 +516,7 @@ export default function HistoryPage() {
                     </Link>
 
                     <button
-                      onClick={() =>
-                        deleteScan(scan.id)
-                      }
+                      onClick={() => deleteScan(scan.id)}
                       className="rounded-xl border border-red-500/30 bg-red-500/5 px-5 py-3 font-semibold text-red-400 transition hover:bg-red-500/10"
                     >
                       Delete

@@ -1,5 +1,5 @@
-from database import Base, engine
-from models import Scan
+from backend.database import Base, engine
+from backend.models import Scan
 
 
 print("========================================")
